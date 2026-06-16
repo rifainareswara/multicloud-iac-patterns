@@ -1,0 +1,30 @@
+# Terraform — NEVER commit state or var files (they hold secrets & real IDs)
+.terraform/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+.terraform.lock.hcl
+
+# Credentials
+*.credentials
+credentials*.txt
+.vault_pass
+
+# Environment
+.env
+.env.*
+!**/.env.example
+
+# Ansible
+*.retry
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Claude Code (local agent config)
+.claude/

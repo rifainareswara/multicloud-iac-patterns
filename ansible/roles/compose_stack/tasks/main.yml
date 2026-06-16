@@ -1,0 +1,106 @@
+---
+# Deploy a self-hosted Docker Compose stack idempotently:
+#   pull config from a git repo -> inject managed secrets -> converge the stack.
+# Used for the central observability stack, GitLab, etc.
+
+- name: Require stack_service to be set
+  ansible.builtin.assert:
+    that:
+      - stack_service is defined
+      - stack_service | length > 0
+    fail_msg: "Set 'stack_service' (folder under {{ compose_repo_dir }}), e.g. grafana-prometheus."
+
+- name: Ensure git is present
+  ansible.builtin.command: git --version
+  register: _git_check
+  changed_when: false
+  failed_when: false
+
+- name: Install git if missing
+  ansible.builtin.apt:
+    name: git
+    state: present
+    update_cache: no
+  when: _git_check.rc != 0
+
+- name: Check whether the repo already exists
+  ansible.builtin.stat:
+    path: "{{ compose_repo_dir }}/.git"
+  register: _repo_git
+
+- name: Ignore file-mode (chmod) changes so they don't block git pull
+  ansible.builtin.command: git config core.fileMode false
+  args:
+    chdir: "{{ compose_repo_dir }}"
+  changed_when: false
+  when: _repo_git.stat.exists
+
+- name: Clone / update the compose repo
+  ansible.builtin.git:
+    repo: "{{ compose_repo_url }}"
+    dest: "{{ compose_repo_dir }}"
+    version: "{{ compose_repo_version }}"
+    accept_hostkey: yes
+    force: "{{ compose_force | bool }}"
+  environment:
+    GIT_TERMINAL_PROMPT: "0"   # fail fast instead of hanging for credentials
+  when: update_repo | bool
+
+- name: Resolve path to the managed .env on the control node
+  ansible.builtin.set_fact:
+    _local_env_path: "{{ compose_env_dir }}/{{ stack_service }}/.env"
+
+- name: Copy managed .env to the server (only if a managed file exists)
+  ansible.builtin.copy:
+    src: "{{ _local_env_path }}"
+    dest: "{{ compose_repo_dir }}/{{ stack_service }}/.env"
+    mode: "0600"
+  when: _local_env_path is exists
+
+- name: Resolve path to managed non-env files (secrets/config) for the stack
+  ansible.builtin.set_fact:
+    _local_files_dir: "{{ compose_env_dir }}/{{ stack_service }}/files"
+
+# Copy the `files/` tree verbatim into the stack root (preserving subdirs).
+# Used for secrets/config that don't go through .env (e.g. a Prometheus bearer
+# token). mode 0644 because the *process inside the container* reads them
+# (e.g. Prometheus runs as `nobody`), not just the compose CLI on the host.
+- name: Copy managed files (secrets/config) to the server, preserving structure
+  ansible.builtin.copy:
+    src: "{{ _local_files_dir }}/"
+    dest: "{{ compose_repo_dir }}/{{ stack_service }}/"
+    mode: "0644"
+    directory_mode: "0755"
+  when: _local_files_dir is exists
+
+- name: Ensure the docker network exists
+  ansible.builtin.shell: >-
+    docker network inspect {{ compose_network }} >/dev/null 2>&1
+    || docker network create {{ compose_network }}
+  register: _net
+  changed_when: "'Error' not in _net.stderr and _net.stdout | length > 0"
+
+- name: Pull latest images
+  ansible.builtin.command: docker compose pull
+  args:
+    chdir: "{{ compose_repo_dir }}/{{ stack_service }}"
+  when: compose_pull | bool
+  changed_when: false
+
+- name: Bring up the stack (idempotent)
+  ansible.builtin.command: docker compose up -d --remove-orphans
+  args:
+    chdir: "{{ compose_repo_dir }}/{{ stack_service }}"
+  register: _up
+  changed_when: "'Started' in _up.stderr or 'Recreated' in _up.stderr or 'Created' in _up.stderr"
+
+- name: Show container status
+  ansible.builtin.command: docker compose ps
+  args:
+    chdir: "{{ compose_repo_dir }}/{{ stack_service }}"
+  changed_when: false
+  register: _ps
+
+- name: Report status
+  ansible.builtin.debug:
+    var: _ps.stdout_lines

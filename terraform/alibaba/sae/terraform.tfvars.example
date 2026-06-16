@@ -1,0 +1,45 @@
+# Copy to terraform.tfvars and fill with your real values.
+# terraform.tfvars is gitignored — it holds account-specific IDs.
+
+environment       = "dev"
+region            = "ap-southeast-5"
+namespace_id      = "<region>:<namespace-name>"
+registry_url      = "your-registry.example.cr.aliyuncs.com"
+acr_namespace     = "your-team"
+acr_instance_id   = "cri-xxxxxxxxxxxxxxxx"
+vpc_id            = "vpc-xxxxxxxxxxxxxxxx"
+vswitch_id        = "vsw-xxxxxxxxxxxxxxxx"
+security_group_id = "sg-xxxxxxxxxxxxxxxx"
+
+tags = {
+  Project = "demo"
+  Owner   = "platform"
+}
+
+# Define every app once. FastAPI services get an explicit command; the
+# Node frontend/backend use the image's own entrypoint (empty command).
+applications = {
+  backend = {
+    app_name = "demo-backend-dev"
+    repo     = "demo-backend"
+  }
+  frontend = {
+    app_name = "demo-frontend-dev"
+    repo     = "demo-frontend"
+  }
+  generate_image = {
+    app_name     = "demo-generate-image-dev"
+    repo         = "demo-generate-image"
+    command      = "/opt/venv/bin/fastapi"
+    command_args = ["run", "main.py", "--host", "0.0.0.0", "--port", "8000"]
+  }
+  generate_video = {
+    app_name     = "demo-generate-video-dev"
+    repo         = "demo-generate-video"
+    command      = "/opt/venv/bin/fastapi"
+    command_args = ["run", "main.py", "--host", "0.0.0.0", "--port", "8000"]
+    # Heavier workload — override the defaults.
+    cpu    = 1000
+    memory = 2048
+  }
+}

@@ -1,0 +1,76 @@
+# Cost-saving automation: park non-production serverless apps outside working
+# hours, then start them again in the morning. Non-prod only.
+#
+# LESSON LEARNED (see the outage postmortem case study): an earlier version of
+# this could stop a whole fleet with no environment guard and no dry-run. This
+# version hard-codes the namespace to non-prod and supports a dry run, so a
+# manual test can never silently take down production-shaped resources.
+
+name: SAE Power Scheduler
+
+on:
+  schedule:
+    - cron: "0 13 * * 1-5"   # stop: weekdays, off-hours (UTC)
+    - cron: "0 0  * * 1-5"   # start: weekdays, morning (UTC)
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "start | stop"
+        required: true
+        default: "start"
+        type: choice
+        options: [start, stop]
+      dry_run:
+        description: "Print actions without executing"
+        required: false
+        default: "true"
+        type: boolean
+
+# GUARDRAIL: only ever touches the non-prod namespace.
+env:
+  REGION: ap-southeast-5
+  NAMESPACE_ID: "${{ vars.NONPROD_NAMESPACE_ID }}"   # e.g. <region>:team-dev
+  DRY_RUN: "${{ github.event.inputs.dry_run || 'false' }}"
+
+jobs:
+  power:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine action
+        id: act
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # 13:00 UTC -> stop, 00:00 UTC -> start
+            [ "$(date -u +%H)" = "13" ] && echo "action=stop" >> "$GITHUB_OUTPUT" || echo "action=start" >> "$GITHUB_OUTPUT"
+          else
+            echo "action=${{ github.event.inputs.action }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Safety check — refuse anything but the non-prod namespace
+        run: |
+          case "$NAMESPACE_ID" in
+            *prod*) echo "::error::Refusing to run against a prod-looking namespace: $NAMESPACE_ID"; exit 1 ;;
+          esac
+          test -n "$NAMESPACE_ID" || { echo "::error::NONPROD_NAMESPACE_ID is empty"; exit 1; }
+
+      - name: Configure CLI
+        run: |
+          # Credentials come from repo secrets, scoped to a least-privilege RAM user.
+          echo "Configuring CLI for region $REGION (namespace $NAMESPACE_ID)"
+        env:
+          ALICLOUD_ACCESS_KEY_ID: ${{ secrets.ALICLOUD_ACCESS_KEY_ID }}
+          ALICLOUD_ACCESS_KEY_SECRET: ${{ secrets.ALICLOUD_ACCESS_KEY_SECRET }}
+
+      - name: ${{ steps.act.outputs.action }} non-prod apps
+        run: |
+          ACTION="${{ steps.act.outputs.action }}"
+          echo "Action: $ACTION  |  dry_run: $DRY_RUN  |  namespace: $NAMESPACE_ID"
+          # Pseudocode — list apps in the non-prod namespace and Start/Stop each.
+          for app in $(./scripts/list-nonprod-apps.sh); do
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[dry-run] would ${ACTION} ${app}"
+            else
+              echo "${ACTION} ${app}"
+              # ./scripts/sae-power.sh "$ACTION" "$app"
+            fi
+          done

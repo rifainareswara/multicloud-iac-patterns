@@ -1,0 +1,19 @@
+---
+# Where the compose repo is cloned on the target host.
+compose_repo_dir: /opt/compose
+
+# Git source of the compose stacks (config-as-code, separate from this repo).
+compose_repo_url: "git@github.com:your-org/compose.git"
+compose_repo_version: main
+
+# Local (control-node) directory holding managed secrets/.env per stack,
+# kept OUT of the compose repo so secrets never live in git.
+compose_env_dir: "{{ playbook_dir }}/../env"
+
+# Shared docker network all stacks attach to.
+compose_network: web
+
+# Toggles.
+update_repo: true     # git pull before deploy
+compose_pull: true    # docker compose pull before up
+compose_force: false  # force-reset local repo changes on pull
